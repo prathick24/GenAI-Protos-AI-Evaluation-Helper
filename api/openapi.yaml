@@ -1,0 +1,1131 @@
+openapi: 3.1.0
+info:
+  title: AI Evaluation Helper — Internal API
+  version: 1.0.0
+  description: >
+    Internal HTTP contract for the AI Evaluation Helper backend. Consumed by the
+    Streamlit frontend only. The frontend has no direct database or LLM access.
+    Backend layering: Routes -> Services -> Agents -> Repositories -> PostgreSQL/pgvector.
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+tags:
+  - name: System
+  - name: Syllabus
+  - name: QuestionPapers
+  - name: Exams
+  - name: AnswerSheets
+  - name: Marks
+  - name: Students
+  - name: Chat
+
+paths:
+  /api/v1/health:
+    get:
+      tags: [System]
+      summary: Liveness probe
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /api/v1/ready:
+    get:
+      tags: [System]
+      summary: Readiness probe (DB, pgvector, tables)
+      operationId: getReady
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ready"
+        "503":
+          description: Dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ---------------------------------------------------------------- Syllabus
+  /api/v1/syllabus/upload:
+    post:
+      tags: [Syllabus]
+      summary: Upload a syllabus and index it (extract/OCR -> chunk -> embed)
+      operationId: uploadSyllabus
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                title: { type: string }
+                subject: { type: string }
+                class_section: { type: string }
+                scope:
+                  type: array
+                  description: In-scope unit numbers
+                  items: { type: string }
+      responses:
+        "201":
+          description: Syllabus accepted and indexed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Syllabus"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/v1/syllabus:
+    get:
+      tags: [Syllabus]
+      summary: List syllabi
+      operationId: listSyllabus
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Syllabus"
+
+  /api/v1/syllabus/{syllabusId}:
+    parameters:
+      - $ref: "#/components/parameters/SyllabusId"
+    get:
+      tags: [Syllabus]
+      summary: Get a syllabus
+      operationId: getSyllabus
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Syllabus"
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Syllabus]
+      summary: Soft-delete a syllabus
+      operationId: deleteSyllabus
+      responses:
+        "204": { description: Deleted }
+
+  /api/v1/syllabus/{syllabusId}/topics:
+    parameters:
+      - $ref: "#/components/parameters/SyllabusId"
+    get:
+      tags: [Syllabus]
+      summary: Unit/topic tree extracted from the syllabus
+      operationId: getSyllabusTopics
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UnitTopics"
+
+  # -------------------------------------------------------- Question papers
+  /api/v1/question-papers/generate:
+    post:
+      tags: [QuestionPapers]
+      summary: Generate a question paper and validate it in one step
+      description: >
+        Runs generation and FR-003 validation inline. The paper is persisted
+        either way: moved to `validated` when every check passes, otherwise left
+        as `draft` with the failing questions marked. Returns the paper together
+        with the validation report.
+      operationId: generateQuestionPaper
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GeneratePaperRequest"
+      responses:
+        "201":
+          description: Paper generated (and validated) successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeneratePaperResponse"
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /api/v1/question-papers/generate/stream:
+    post:
+      tags: [QuestionPapers]
+      summary: Generate a question paper (NDJSON progress stream)
+      operationId: generateQuestionPaperStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GeneratePaperRequest"
+      responses:
+        "200":
+          description: NDJSON stream of per-unit progress events
+          content:
+            application/x-ndjson:
+              schema:
+                $ref: "#/components/schemas/PaperStreamEvent"
+
+  /api/v1/question-papers:
+    get:
+      tags: [QuestionPapers]
+      summary: List question papers
+      operationId: listQuestionPapers
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QuestionPaper"
+
+  /api/v1/question-papers/{paperId}:
+    parameters:
+      - $ref: "#/components/parameters/PaperId"
+    get:
+      tags: [QuestionPapers]
+      summary: Get a paper with its questions and rubrics
+      operationId: getQuestionPaper
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuestionPaperDetail"
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/question-papers/{paperId}/approve:
+    parameters:
+      - $ref: "#/components/parameters/PaperId"
+    post:
+      tags: [QuestionPapers]
+      summary: Approve a validated paper
+      operationId: approveQuestionPaper
+      responses:
+        "200":
+          description: Approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuestionPaper"
+
+  /api/v1/question-papers/{paperId}/chat:
+    parameters:
+      - $ref: "#/components/parameters/PaperId"
+    post:
+      tags: [QuestionPapers]
+      summary: Change a paper from a chat message, then re-validate it (FR-010)
+      description: >
+        Interprets the teacher's message as a plan of changes and applies them:
+        wording rewrites are authored by the generation agent, while structural
+        edits (drop, reorder, duration, blueprint) are applied deterministically.
+        The blueprint is reconciled to the resulting questions and the paper is
+        re-validated, so it lands as `validated` or back in `draft`. The
+        conversation turns are persisted and the assistant's reply is returned
+        alongside the updated paper.
+      operationId: chatWithQuestionPaper
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaperChatRequest"
+      responses:
+        "200":
+          description: Changes applied and the paper re-validated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaperChatResponse"
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /api/v1/questions/{questionId}:
+    parameters:
+      - $ref: "#/components/parameters/QuestionId"
+    patch:
+      tags: [QuestionPapers]
+      summary: Edit a question (teacher correction)
+      operationId: updateQuestion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuestionUpdate"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Question"
+
+  # ------------------------------------------------------------------- Exams
+  /api/v1/exams:
+    get:
+      tags: [Exams]
+      summary: List exams
+      operationId: listExams
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Exam"
+    post:
+      tags: [Exams]
+      summary: Create an exam linked to an approved question paper
+      operationId: createExam
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExamCreate"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Exam"
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /api/v1/exams/{examId}:
+    parameters:
+      - $ref: "#/components/parameters/ExamId"
+    get:
+      tags: [Exams]
+      summary: Get an exam
+      operationId: getExam
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Exam"
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/exams/{examId}/answer-sheets/upload:
+    parameters:
+      - $ref: "#/components/parameters/ExamId"
+    post:
+      tags: [AnswerSheets]
+      summary: Upload one or more answer sheets (typed or scanned)
+      operationId: uploadAnswerSheets
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: array
+                  items: { type: string, format: binary }
+                student_id: { type: string, format: uuid }
+                input_type:
+                  type: string
+                  enum: [typed, scanned, auto]
+                  default: auto
+      responses:
+        "207":
+          description: Per-file results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UploadResult"
+
+  /api/v1/exams/{examId}/answer-sheets:
+    parameters:
+      - $ref: "#/components/parameters/ExamId"
+    get:
+      tags: [AnswerSheets]
+      summary: List answer sheets for an exam
+      operationId: listExamAnswerSheets
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AnswerSheet"
+
+  /api/v1/exams/{examId}/marksheet:
+    parameters:
+      - $ref: "#/components/parameters/ExamId"
+    get:
+      tags: [Exams]
+      summary: Consolidated marksheet
+      operationId: getExamMarksheet
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Marksheet"
+
+  /api/v1/exams/{examId}/analytics:
+    parameters:
+      - $ref: "#/components/parameters/ExamId"
+    get:
+      tags: [Exams]
+      summary: Class-level analytics
+      operationId: getExamAnalytics
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassAnalytics"
+
+  # ----------------------------------------------------------- Answer sheets
+  /api/v1/answer-sheets/{sheetId}:
+    parameters:
+      - $ref: "#/components/parameters/SheetId"
+    get:
+      tags: [AnswerSheets]
+      summary: Get a sheet with answers, marks and feedback
+      operationId: getAnswerSheet
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnswerSheetDetail"
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/answer-sheets/{sheetId}/segment:
+    parameters:
+      - $ref: "#/components/parameters/SheetId"
+    post:
+      tags: [AnswerSheets]
+      summary: Segment a sheet into per-question answers aligned to the paper
+      operationId: segmentAnswerSheet
+      responses:
+        "200":
+          description: Segmented answers (with any unmatched regions)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SegmentationResult"
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Sheet is approved or the paper has no questions
+
+  /api/v1/answer-sheets/{sheetId}/grade:
+    parameters:
+      - $ref: "#/components/parameters/SheetId"
+    post:
+      tags: [AnswerSheets]
+      summary: Grade a segmented sheet against each question's rubric
+      operationId: gradeAnswerSheet
+      responses:
+        "200":
+          description: Awarded marks with evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GradingResult"
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Sheet is approved or has not been segmented
+
+  /api/v1/answer-sheets/{sheetId}/grade/stream:
+    parameters:
+      - $ref: "#/components/parameters/SheetId"
+    post:
+      tags: [AnswerSheets]
+      summary: Grade a sheet (NDJSON progress stream)
+      operationId: gradeAnswerSheetStream
+      responses:
+        "200":
+          description: NDJSON stream of grading events
+          content:
+            application/x-ndjson:
+              schema:
+                $ref: "#/components/schemas/GradingStreamEvent"
+
+  /api/v1/answer-sheets/{sheetId}/approve:
+    parameters:
+      - $ref: "#/components/parameters/SheetId"
+    post:
+      tags: [AnswerSheets]
+      summary: Approve a graded sheet (teacher finalization)
+      operationId: approveAnswerSheet
+      responses:
+        "200":
+          description: Approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnswerSheet"
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Sheet is already approved or has not been graded
+
+  # ------------------------------------------------------------------- Marks
+  /api/v1/marks/{markId}/override:
+    parameters:
+      - $ref: "#/components/parameters/MarkId"
+    patch:
+      tags: [Marks]
+      summary: Override an AI-awarded mark (human-in-the-loop)
+      operationId: overrideMark
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkOverride"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Mark"
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The mark belongs to an approved sheet
+        "422":
+          description: The awarded mark exceeds the question's maximum
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  # ---------------------------------------------------------------- Students
+  /api/v1/students:
+    get:
+      tags: [Students]
+      summary: List students
+      operationId: listStudents
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Student"
+    post:
+      tags: [Students]
+      summary: Create a student
+      operationId: createStudent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StudentCreate"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Student"
+
+  # -------------------------------------------------------------------- Chat
+  /api/v1/chat/ask:
+    post:
+      tags: [Chat]
+      summary: Ask the multi-agent assistant (grounded, cited)
+      operationId: chatAsk
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatAskRequest"
+      responses:
+        "200":
+          description: Grounded answer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatAskResponse"
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+components:
+  parameters:
+    SyllabusId:
+      name: syllabusId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PaperId:
+      name: paperId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    QuestionId:
+      name: questionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ExamId:
+      name: examId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    SheetId:
+      name: sheetId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    MarkId:
+      name: markId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: The request conflicts with the resource's current state
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Health:
+      type: object
+      properties:
+        status: { type: string, example: ok }
+        version: { type: string }
+    Ready:
+      type: object
+      properties:
+        status: { type: string, example: ready }
+        database: { type: boolean }
+        pgvector: { type: boolean }
+        tables: { type: boolean }
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        message: { type: string }
+        correlation_id: { type: string }
+        detail: { type: object, additionalProperties: true }
+
+    Audit:
+      type: object
+      properties:
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        is_active: { type: boolean }
+
+    Syllabus:
+      allOf:
+        - $ref: "#/components/schemas/Audit"
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            title: { type: string }
+            subject: { type: string }
+            class_section: { type: string }
+            file_path: { type: string }
+            input_type: { type: string, enum: [typed, scanned] }
+            ocr_status: { type: string, enum: [pending, processing, done, failed] }
+            status: { type: string, enum: [processing, ready, failed] }
+            version: { type: integer }
+            scope:
+              type: array
+              items: { type: string }
+            chunk_count: { type: integer }
+
+    UnitTopics:
+      type: object
+      properties:
+        unit_no: { type: string }
+        unit_name: { type: string }
+        topics:
+          type: array
+          items: { type: string }
+
+    GeneratePaperRequest:
+      type: object
+      required: [syllabus_id, blueprint]
+      properties:
+        syllabus_id: { type: string, format: uuid }
+        title: { type: string }
+        scope:
+          type: array
+          items: { type: string }
+        blueprint:
+          $ref: "#/components/schemas/Blueprint"
+
+    Blueprint:
+      type: object
+      required: [total_marks]
+      properties:
+        total_marks: { type: integer }
+        duration_minutes: { type: integer }
+        question_types: { type: array, items: { type: string } }
+        marks_per_type:
+          type: object
+          additionalProperties: { type: integer }
+        difficulty_mix:
+          type: object
+          properties:
+            easy: { type: number }
+            medium: { type: number }
+            hard: { type: number }
+        topic_weightage:
+          type: object
+          additionalProperties: { type: number }
+
+    QuestionPaper:
+      allOf:
+        - $ref: "#/components/schemas/Audit"
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            syllabus_id: { type: string, format: uuid }
+            title: { type: string }
+            subject: { type: string }
+            class_section: { type: string }
+            total_marks: { type: integer }
+            duration_minutes: { type: integer }
+            version: { type: integer }
+            source: { type: string, enum: [generated, uploaded] }
+            status: { type: string, enum: [draft, validated, approved, failed] }
+            blueprint: { $ref: "#/components/schemas/Blueprint" }
+
+    QuestionPaperDetail:
+      allOf:
+        - $ref: "#/components/schemas/QuestionPaper"
+        - type: object
+          properties:
+            questions:
+              type: array
+              items: { $ref: "#/components/schemas/Question" }
+
+    Question:
+      allOf:
+        - $ref: "#/components/schemas/Audit"
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            question_paper_id: { type: string, format: uuid }
+            source_chunk_id: { type: [string, "null"], format: uuid }
+            order_index: { type: integer }
+            question_text: { type: string }
+            question_type: { type: string }
+            marks: { type: number }
+            options: { type: [array, "null"], items: { type: string } }
+            correct_option: { type: [string, "null"] }
+            model_answer: { type: string }
+            topic: { type: string }
+            difficulty: { type: string }
+            validation_status: { type: string }
+            rubric:
+              type: array
+              items: { $ref: "#/components/schemas/RubricCriterion" }
+
+    QuestionUpdate:
+      type: object
+      properties:
+        question_text: { type: string }
+        marks: { type: number }
+        model_answer: { type: string }
+        difficulty: { type: string }
+        options: { type: array, items: { type: string } }
+        correct_option: { type: string }
+
+    RubricCriterion:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        question_id: { type: string, format: uuid }
+        criterion_text: { type: string }
+        max_marks: { type: number }
+        order_index: { type: integer }
+
+    ValidationCheck:
+      type: object
+      properties:
+        name: { type: string }
+        passed: { type: boolean }
+        summary: { type: string }
+        details: { type: [object, "null"], additionalProperties: true }
+
+    QuestionValidationResult:
+      type: object
+      properties:
+        question_id: { type: string, format: uuid }
+        order_index: { type: integer }
+        status: { type: string, enum: [pending, passed, failed] }
+        issues: { type: array, items: { type: string } }
+
+    ValidationReport:
+      type: object
+      properties:
+        paper_id: { type: string, format: uuid }
+        passed: { type: boolean }
+        paper_status: { type: string, enum: [draft, validated] }
+        checks:
+          type: array
+          items: { $ref: "#/components/schemas/ValidationCheck" }
+        questions:
+          type: array
+          items: { $ref: "#/components/schemas/QuestionValidationResult" }
+
+    GeneratePaperResponse:
+      type: object
+      properties:
+        paper: { $ref: "#/components/schemas/QuestionPaperDetail" }
+        validation_report: { $ref: "#/components/schemas/ValidationReport" }
+
+    PaperChatRequest:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string, minLength: 1, maxLength: 4000 }
+        conversation_id:
+          type: [string, "null"]
+          format: uuid
+
+    ChangeOperation:
+      type: object
+      required: [op]
+      properties:
+        op:
+          type: string
+          enum: [rewrite, drop, reorder, set_duration, adjust_blueprint]
+        order_indices:
+          type: array
+          items: { type: integer }
+        order:
+          type: array
+          items: { type: integer }
+        duration_minutes: { type: [integer, "null"] }
+        question_types:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string, enum: [mcq, short, long] }
+              count: { type: integer }
+              marks_each: { type: integer }
+        difficulty_mix:
+          type: [object, "null"]
+          properties:
+            easy: { type: number }
+            medium: { type: number }
+            hard: { type: number }
+        instructions: { type: [string, "null"] }
+
+    PaperChatResponse:
+      type: object
+      properties:
+        conversation_id: { type: string, format: uuid }
+        reply: { type: string }
+        applied:
+          type: array
+          items: { type: string }
+        paper: { $ref: "#/components/schemas/QuestionPaperDetail" }
+        validation_report: { $ref: "#/components/schemas/ValidationReport" }
+
+    PaperStreamEvent:
+      type: object
+      properties:
+        event: { type: string, enum: [unit_started, questions_generated, unit_done, validating, done, error] }
+        unit_no: { type: string }
+        questions:
+          type: array
+          items: { $ref: "#/components/schemas/Question" }
+        message: { type: string }
+
+    Exam:
+      allOf:
+        - $ref: "#/components/schemas/Audit"
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            title: { type: string }
+            subject: { type: string }
+            class_section: { type: string }
+            exam_date: { type: string, format: date }
+            total_marks: { type: integer }
+            status: { type: string }
+            question_paper_id: { type: string, format: uuid }
+
+    ExamCreate:
+      type: object
+      required: [title, question_paper_id]
+      properties:
+        title: { type: string }
+        subject: { type: string }
+        class_section: { type: string }
+        exam_date: { type: string, format: date }
+        question_paper_id: { type: string, format: uuid }
+
+    AnswerSheet:
+      allOf:
+        - $ref: "#/components/schemas/Audit"
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            exam_id: { type: string, format: uuid }
+            student_id: { type: string, format: uuid }
+            file_path: { type: string }
+            input_type: { type: string, enum: [typed, scanned] }
+            ocr_status: { type: string, enum: [pending, processing, done, failed] }
+            sheet_status:
+              type: string
+              enum: [uploaded, queued, grading, graded, reviewed, approved, failed]
+            total_awarded_marks: { type: number }
+
+    AnswerSheetDetail:
+      allOf:
+        - $ref: "#/components/schemas/AnswerSheet"
+        - type: object
+          properties:
+            answers:
+              type: array
+              items: { $ref: "#/components/schemas/Answer" }
+            feedback: { $ref: "#/components/schemas/Feedback" }
+
+    Answer:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        answer_sheet_id: { type: string, format: uuid }
+        question_id: { type: string, format: uuid }
+        order_index: { type: integer }
+        answer_text: { type: string }
+        is_answered: { type: boolean }
+        ocr_confidence: { type: [number, "null"] }
+        mark: { $ref: "#/components/schemas/Mark" }
+
+    Mark:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        answer_id: { type: string, format: uuid }
+        awarded_marks: { type: number }
+        max_marks: { type: number }
+        rubric_scores:
+          type: array
+          items: { $ref: "#/components/schemas/RubricScore" }
+        evidence: { type: string }
+        reasoning: { type: string }
+        verifier_status: { type: string, enum: [agreed, flagged, adjusted] }
+        verifier_notes: { type: [string, "null"] }
+        confidence: { type: number }
+        is_overridden: { type: boolean }
+        original_marks: { type: [number, "null"] }
+        graded_by: { type: string }
+
+    MarkOverride:
+      type: object
+      required: [awarded_marks]
+      properties:
+        awarded_marks: { type: number }
+        reason: { type: string }
+
+    Feedback:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        answer_sheet_id: { type: string, format: uuid }
+        overall_comments: { type: string }
+        strengths: { type: string }
+        improvements: { type: string }
+
+    RubricScore:
+      type: object
+      description: One rubric criterion's awarded score within a mark.
+      properties:
+        criterion_id: { type: [string, "null"], format: uuid }
+        criterion_text: { type: string }
+        max_marks: { type: number }
+        awarded_marks: { type: number }
+
+    UnmatchedRegion:
+      type: object
+      description: Sheet text that could not be aligned to any question.
+      properties:
+        text: { type: string }
+        reason: { type: string }
+
+    SegmentationResult:
+      type: object
+      properties:
+        answer_sheet_id: { type: string, format: uuid }
+        exam_id: { type: string, format: uuid }
+        sheet_status: { type: string }
+        total_questions: { type: integer }
+        answered: { type: integer }
+        unanswered: { type: integer }
+        answers:
+          type: array
+          items: { $ref: "#/components/schemas/Answer" }
+        unmatched_regions:
+          type: array
+          items: { $ref: "#/components/schemas/UnmatchedRegion" }
+
+    GradingResult:
+      type: object
+      properties:
+        answer_sheet_id: { type: string, format: uuid }
+        exam_id: { type: string, format: uuid }
+        sheet_status: { type: string }
+        total_awarded_marks: { type: number }
+        total_max_marks: { type: number }
+        marks:
+          type: array
+          items: { $ref: "#/components/schemas/Mark" }
+
+    UploadResult:
+      type: object
+      properties:
+        file: { type: string }
+        status: { type: string, enum: [uploaded, error] }
+        answer_sheet_id: { type: [string, "null"], format: uuid }
+        reason: { type: [string, "null"] }
+
+    GradingStreamEvent:
+      type: object
+      properties:
+        event: { type: string, enum: [ocr_done, segmented, answer_graded, verified, feedback_done, done, error] }
+        question_id: { type: [string, "null"], format: uuid }
+        mark: { $ref: "#/components/schemas/Mark" }
+        message: { type: string }
+
+    Marksheet:
+      type: object
+      properties:
+        exam_id: { type: string, format: uuid }
+        total_marks: { type: integer }
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              answer_sheet_id: { type: string, format: uuid }
+              student_id:
+                type: [string, "null"]
+                format: uuid
+              student_name: { type: string }
+              total_awarded_marks: { type: number }
+              per_question:
+                type: object
+                description: Marks awarded keyed by question id
+                additionalProperties: { type: number }
+
+    ClassAnalytics:
+      type: object
+      properties:
+        exam_id: { type: string, format: uuid }
+        average: { type: number }
+        highest: { type: number }
+        lowest: { type: number }
+        distribution:
+          type: object
+          additionalProperties: { type: integer }
+        per_topic_strength:
+          type: object
+          additionalProperties: { type: number }
+        hardest_questions:
+          type: array
+          items: { type: string, format: uuid }
+        easiest_questions:
+          type: array
+          items: { type: string, format: uuid }
+
+    Student:
+      allOf:
+        - $ref: "#/components/schemas/Audit"
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            roll_no: { type: string }
+            class_section: { type: string }
+            email: { type: [string, "null"] }
+
+    StudentCreate:
+      type: object
+      required: [name, roll_no]
+      properties:
+        name: { type: string }
+        roll_no: { type: string }
+        class_section: { type: string }
+        email: { type: string }
+
+    ChatAskRequest:
+      type: object
+      required: [question]
+      properties:
+        question: { type: string }
+        exam_id: { type: [string, "null"], format: uuid }
+        conversation_id: { type: [string, "null"], format: uuid }
+
+    Citation:
+      type: object
+      properties:
+        source_type: { type: string, enum: [syllabus, question, answer, marks] }
+        source_id: { type: string, format: uuid }
+        unit_no: { type: [string, "null"] }
+        topic_name: { type: [string, "null"] }
+        snippet: { type: string }
+
+    ChatAskResponse:
+      type: object
+      properties:
+        question: { type: string }
+        answer: { type: string }
+        citations:
+          type: array
+          items: { $ref: "#/components/schemas/Citation" }
+        conversation_id: { type: string, format: uuid }

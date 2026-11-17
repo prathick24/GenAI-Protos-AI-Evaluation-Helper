@@ -1,0 +1,299 @@
+erDiagram
+    USERS ||--o{ EXAMS : creates
+    USERS ||--o{ SYLLABUS : creates
+    USERS ||--o{ CONVERSATIONS : owns
+    CONVERSATIONS ||--o{ CONVERSATION_MESSAGES : contains
+    EXAMS }o--|| QUESTION_PAPERS : uses
+    QUESTION_PAPERS }o--|| SYLLABUS : sourced_from
+    SYLLABUS ||--o{ SYLLABUS_CHUNKS : contains
+    SYLLABUS_CHUNKS ||--o{ QUESTIONS : cited_by
+    QUESTION_PAPERS ||--o{ QUESTIONS : contains
+    QUESTIONS ||--o{ RUBRIC_CRITERIA : graded_by
+    EXAMS ||--o{ ANSWER_SHEETS : has
+    STUDENTS ||--o{ ANSWER_SHEETS : submits
+    ANSWER_SHEETS ||--o{ ANSWERS : contains
+    QUESTIONS ||--o{ ANSWERS : answered_by
+    ANSWERS ||--|| MARKS : receives
+    ANSWER_SHEETS ||--o{ FEEDBACK : generates
+    EXAMS ||--o{ CONVERSATIONS : discussed_in
+    USERS ||--o{ AGENT_RUNS : triggers
+    EXAMS ||--o{ AGENT_RUNS : logs
+    ANSWER_SHEETS ||--o{ AGENT_RUNS : logs
+
+    USERS {
+        uuid id PK
+        string name
+        string email
+        string role
+        string password_hash
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    STUDENTS {
+        uuid id PK
+        string name
+        string roll_no
+        string class_section
+        string email
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    SYLLABUS {
+        uuid id PK
+        string title
+        string subject
+        string class_section
+        string file_path
+        string input_type
+        string ocr_status
+        string status
+        int version
+        jsonb scope
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    SYLLABUS_CHUNKS {
+        uuid id PK
+        uuid syllabus_id FK
+        string unit_no
+        string unit_name
+        string topic_name
+        int chunk_index
+        int page_no
+        text raw_text
+        vector embedding
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    EXAMS {
+        uuid id PK
+        string title
+        string subject
+        string class_section
+        date exam_date
+        int total_marks
+        string status
+        uuid question_paper_id FK
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    QUESTION_PAPERS {
+        uuid id PK
+        uuid syllabus_id FK
+        string title
+        string subject
+        string class_section
+        int duration_minutes
+        int total_marks
+        int version
+        string source
+        string status
+        jsonb blueprint
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    QUESTIONS {
+        uuid id PK
+        uuid question_paper_id FK
+        uuid source_chunk_id FK
+        int order_index
+        text question_text
+        string question_type
+        numeric marks
+        jsonb options
+        string correct_option
+        text model_answer
+        string topic
+        string difficulty
+        string validation_status
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    RUBRIC_CRITERIA {
+        uuid id PK
+        uuid question_id FK
+        text criterion_text
+        numeric max_marks
+        int order_index
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    ANSWER_SHEETS {
+        uuid id PK
+        uuid exam_id FK
+        uuid student_id FK
+        string file_path
+        string input_type
+        string ocr_status
+        string sheet_status
+        numeric total_awarded_marks
+        jsonb ocr_confidence
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    ANSWERS {
+        uuid id PK
+        uuid answer_sheet_id FK
+        uuid question_id FK
+        text answer_text
+        boolean is_answered
+        numeric ocr_confidence
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    MARKS {
+        uuid id PK
+        uuid answer_id FK
+        numeric awarded_marks
+        numeric max_marks
+        jsonb rubric_scores
+        text evidence
+        text reasoning
+        string verifier_status
+        text verifier_notes
+        numeric confidence
+        boolean is_overridden
+        numeric original_marks
+        string graded_by
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    FEEDBACK {
+        uuid id PK
+        uuid answer_sheet_id FK
+        text overall_comments
+        text strengths
+        text improvements
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    CONVERSATIONS {
+        uuid id PK
+        uuid user_id FK
+        uuid exam_id FK
+        string title
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    CONVERSATION_MESSAGES {
+        uuid id PK
+        uuid conversation_id FK
+        string role
+        text content
+        string agent_name
+        jsonb tool_calls
+        int tokens
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    ERROR_LOGS {
+        uuid id PK
+        string level
+        string component
+        text message
+        string exception_type
+        string endpoint
+        string method
+        string correlation_id
+        jsonb detail
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    MODEL_COST {
+        uuid id PK
+        string task
+        string agent_name
+        string model
+        string provider
+        int prompt_tokens
+        int completion_tokens
+        int total_tokens
+        numeric cost_usd
+        int latency_ms
+        boolean success
+        string error_code
+        string correlation_id
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }
+
+    AGENT_RUNS {
+        uuid id PK
+        uuid exam_id FK
+        uuid answer_sheet_id FK
+        string agent_name
+        string task
+        string status
+        timestamptz started_at
+        timestamptz ended_at
+        jsonb input_summary
+        jsonb output_summary
+        timestamptz created_at
+        uuid created_by FK
+        timestamptz updated_at
+        uuid updated_by
+        boolean is_active
+    }

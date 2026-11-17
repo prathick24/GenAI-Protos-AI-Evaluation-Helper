@@ -1,0 +1,8 @@
+﻿check,passed,summary
+marks_total,true,Total marks match the blueprint.
+question_types,true,Question types match the blueprint.
+difficulty_mix,true,Difficulty distribution matches the blueprint.
+source_grounding,true,Every question is grounded in a syllabus chunk.
+syllabus_coverage,true,All 10 in-scope unit(s) have at least one question.
+duplication,true,No near-duplicate questions detected.
+ambiguity,true,0 issue(s) raised across 12 reviewed question(s).

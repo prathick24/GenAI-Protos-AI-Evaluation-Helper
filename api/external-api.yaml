@@ -1,0 +1,104 @@
+openapi: 3.1.0
+info:
+  title: External LLM Provider Contract (OpenAI-compatible)
+  version: 1.0.0
+  description: >
+    External dependency contract for the LLM used by the AI Evaluation Helper agents.
+    The provider is OpenAI-compatible (e.g. a free-tier endpoint serving an open-source
+    model such as gpt-oss-120b). Embeddings and OCR are NOT part of this contract — they
+    run locally. Only chat completions are called over the network.
+servers:
+  - url: https://api.example-llm-provider.com/v1
+    description: Configurable via LLM_BASE_URL
+
+paths:
+  /chat/completions:
+    post:
+      summary: Create a chat completion
+      operationId: createChatCompletion
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
+      responses:
+        "200":
+          description: Completion returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletionResponse"
+        "429":
+          description: Rate limited (honour Retry-After / reset headers)
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds to wait before retrying; if >= 60, surface a rate-limit error instead of retrying.
+        "5xx":
+          description: Provider error (retried with exponential backoff)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: LLM_API_KEY from environment (never hardcoded)
+
+  schemas:
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant]
+        content: { type: string }
+
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model: { type: string, example: gpt-oss-120b }
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/ChatMessage" }
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0.2
+        max_tokens: { type: integer }
+        response_format:
+          type: object
+          description: Request strict JSON output for typed-contract tasks.
+          properties:
+            type:
+              type: string
+              enum: [json_object, json_schema]
+            json_schema: { type: object, additionalProperties: true }
+        stream:
+          type: boolean
+          default: false
+
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id: { type: string }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              message: { $ref: "#/components/schemas/ChatMessage" }
+              finish_reason: { type: string }
+        usage:
+          type: object
+          properties:
+            prompt_tokens: { type: integer }
+            completion_tokens: { type: integer }
+            total_tokens: { type: integer }
